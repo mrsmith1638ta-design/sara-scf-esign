@@ -14,7 +14,7 @@ env:
   AZURE_TENANT_ID: 45c5b857-61a2-43f8-b259-314a6e9491f1
   AZURE_CLIENT_ID: d3f81da8-683f-48d1-85b7-e644c10224cb
   RESOURCE_GROUP: sara-rg
-  LOCATION: eastus
+  LOCATION: westus2
   REGISTRY: sararegistry
   IMAGE: sara-scf-esign
   APP_NAME: sara-scf-esign
