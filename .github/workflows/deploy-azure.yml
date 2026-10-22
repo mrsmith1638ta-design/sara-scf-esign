@@ -1,0 +1,98 @@
+name: Deploy to Azure Container Apps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_SUBSCRIPTION_ID: 2fec1ed0-7594-458c-a4a7-353c1b1317aa
+  AZURE_TENANT_ID: 45c5b857-61a2-43f8-b259-314a6e9491f1
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  RESOURCE_GROUP: sara-rg
+  LOCATION: eastus
+  REGISTRY: sararegistry
+  IMAGE: sara-scf-esign
+  APP_NAME: sara-scf-esign
+  TARGET_PORT: "8080"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure resource providers are registered
+        run: |
+          set -euo pipefail
+          for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights; do
+            state=$(az provider show --namespace "$ns" --query registrationState -o tsv)
+            echo "$ns: $state"
+            if [ "$state" != "Registered" ]; then
+              az provider register --namespace "$ns" --wait
+            fi
+          done
+
+      - name: Ensure resource group exists
+        run: |
+          set -euo pipefail
+          az group create \
+            --name "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --output none
+
+      - name: Ensure container registry exists
+        run: |
+          set -euo pipefail
+          if ! az acr show --name "$REGISTRY" --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
+            az acr create \
+              --name "$REGISTRY" \
+              --resource-group "$RESOURCE_GROUP" \
+              --sku Basic \
+              --admin-enabled true \
+              --output none
+          fi
+
+      - name: Build image in ACR
+        run: |
+          set -euo pipefail
+          az acr build \
+            --registry "$REGISTRY" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "${IMAGE}:${GITHUB_SHA}" \
+            --image "${IMAGE}:latest" \
+            .
+
+      - name: Deploy to Container Apps
+        run: |
+          set -euo pipefail
+          az containerapp up \
+            --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --image "${REGISTRY}.azurecr.io/${IMAGE}:${GITHUB_SHA}" \
+            --registry-server "${REGISTRY}.azurecr.io" \
+            --target-port "$TARGET_PORT" \
+            --ingress external
+
+      - name: Output application URL
+        run: |
+          set -euo pipefail
+          fqdn=$(az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Deployed: https://${fqdn}"
+          echo "### Deployed: https://${fqdn}" >> "$GITHUB_STEP_SUMMARY"
